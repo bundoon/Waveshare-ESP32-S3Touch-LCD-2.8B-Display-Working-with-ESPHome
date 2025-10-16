@@ -1,0 +1,478 @@
+esphome:
+  name: waveshare-display
+  friendly_name: Waveshare Display
+  on_boot:
+    - then: 
+        - logger.log: "Waiting 10s for Display VCOM to fully stabilize before Wi-Fi..."
+        - delay: 10s 
+        - logger.log: "Display stabilized. Starting Wi-Fi..."
+        - wifi.enable: 
+        - delay: 1s
+
+esp32:
+  board: esp32-s3-devkitc-1
+  flash_size: 16MB
+  variant: esp32s3
+  framework:
+    type: esp-idf
+    version: recommended
+    sdkconfig_options:
+      CONFIG_ESPTOOLPY_FLASHSIZE_16MB: y
+      CONFIG_ESPTOOLPY_FLASHFREQ_80M: y
+      CONFIG_ESPTOOLPY_FLASHMODE_QIO: y
+      CONFIG_ESP_DEFAULT_CPU_FREQ_240: y
+      CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240: y
+      CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ: "240"
+      CONFIG_SPIRAM: y
+      CONFIG_SPIRAM_MODE_OCT: y
+      CONFIG_SPIRAM_SPEED_80M: y
+      CONFIG_SPIRAM_BOOT_INIT: y
+      CONFIG_SPIRAM_USE_CAPS_ALLOC: y
+      CONFIG_SPIRAM_IGNORE_NOTFOUND: n
+      CONFIG_SPIRAM_FETCH_INSTRUCTIONS: n
+      CONFIG_SPIRAM_RODATA: n
+      CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL: "8192"
+      CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL: "65536"
+      CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP: y
+      CONFIG_SPIRAM_USE_MALLOC: y
+      CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB: y
+      CONFIG_ESP32S3_DATA_CACHE_64KB: y
+      CONFIG_ESP32S3_ICACHE_ASSOCIATED_WAYS_8: y
+      CONFIG_ESP32S3_DCACHE_ASSOCIATED_WAYS_8: y
+
+logger:
+  level: DEBUG 
+  hardware_uart: USB_SERIAL_JTAG
+
+safe_mode:
+  num_attempts: 15
+  reboot_timeout: 10min
+
+api:
+  encryption:
+    key: "YOUR_API_KEY_HERE"
+
+ota:
+  - platform: esphome
+    password: "YOUR_OTA_PASSWORD_HERE"
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  enable_on_boot: false  # CRITICAL: Disabled to allow VCOM stabilization
+  ap:
+    ssid: "Waveshare-Display-Fallback"
+    password: "fallback12345"
+
+captive_portal:
+
+# ── Hardware Configuration ──────────────────────────────────────────────────
+
+i2c:
+  - id: i2c_bus
+    sda: GPIO15
+    scl: GPIO07
+    scan: true
+
+spi:
+  - id: spi_lcd
+    clk_pin: GPIO02
+    mosi_pin: GPIO01
+    interface: spi3
+
+pca9554:
+  - id: p_c_a
+    address: 0x20
+    i2c_id: i2c_bus
+
+output:
+  - platform: ledc
+    pin: GPIO06
+    id: lcd_backlight_pwm
+    frequency: 2000Hz
+    channel: 0
+
+light:
+  - platform: monochromatic
+    output: lcd_backlight_pwm
+    name: "Display Backlight"
+    id: display_backlight
+    restore_mode: ALWAYS_ON
+    default_transition_length: 0s
+    gamma_correct: 1
+
+# ── Fonts with Material Design Icons ────────────────────────────────────────
+
+font:
+  - file: "gfonts://Roboto"
+    id: font_small
+    size: 18
+    glyphs: "!%()+=,-_.:°0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz"
+  
+  - file: "gfonts://Roboto@500"
+    id: font_medium
+    size: 26
+    glyphs: "!%()+=,-_.:°0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz"
+  
+  - file: "gfonts://Roboto@500"
+    id: font_large
+    size: 56
+    glyphs: "!%()+=,-_.:°0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz"
+  
+  - file: https://github.com/Templarian/MaterialDesign-Webfont/raw/master/fonts/materialdesignicons-webfont.ttf
+    id: icons_small
+    size: 28
+    bpp: 2
+    glyphs: [
+      "\U000F02DC",  # mdi-home-outline
+    ]
+  
+  - file: https://github.com/Templarian/MaterialDesign-Webfont/raw/master/fonts/materialdesignicons-webfont.ttf
+    id: icons_large
+    size: 48
+    bpp: 2
+    glyphs: [
+      "\U000F0594",  # mdi-weather-night
+      "\U000F050F",  # mdi-thermometer
+      "\U000F0335",  # mdi-lightbulb
+    ]
+
+# ── Home Assistant Integration ─────────────────────────────────────────────
+
+time:
+  - platform: homeassistant
+    id: ha_time
+
+sensor:
+  - platform: homeassistant
+    id: room_temperature
+    entity_id: sensor.YOUR_TEMPERATURE_SENSOR
+    on_value:
+      then:
+        - lvgl.label.update:
+            id: lbl_temp
+            text: !lambda |-
+              char buf[32];
+              snprintf(buf, sizeof(buf), "%.1f°C", x);
+              return std::string(buf);
+
+binary_sensor:
+  - platform: homeassistant
+    id: light_state
+    entity_id: light.YOUR_LIGHT_ENTITY
+    on_state:
+      then:
+        - if:
+            condition:
+              binary_sensor.is_on: light_state
+            then:
+              # Light ON - Yellow button with dark text (BGR color format)
+              - lvgl.widget.update:
+                  id: btn_light
+                  bg_color: 0x3BEBFF  # Yellow in BGR
+              - lvgl.label.update:
+                  id: lbl_light_text
+                  text_color: 0x1A1A1A
+              - lvgl.label.update:
+                  id: lbl_light_status
+                  text: "ON"
+                  text_color: 0x1A1A1A
+              - lvgl.label.update:
+                  id: lbl_light_icon
+                  text_color: 0x1A1A1A
+            else:
+              # Light OFF - Gray button with white text
+              - lvgl.widget.update:
+                  id: btn_light
+                  bg_color: 0x424242
+              - lvgl.label.update:
+                  id: lbl_light_text
+                  text_color: 0xFFFFFF
+              - lvgl.label.update:
+                  id: lbl_light_status
+                  text: "OFF"
+                  text_color: 0xAAAAAA
+              - lvgl.label.update:
+                  id: lbl_light_icon
+                  text_color: 0xFFFFFF
+
+# ── ST7701S Display Configuration ──────────────────────────────────────────
+
+display:
+  - platform: st7701s
+    id: my_display
+    spi_id: spi_lcd
+    spi_mode: MODE1
+    color_order: bgr  # CRITICAL: BGR color order
+    auto_clear_enabled: false
+    update_interval: never
+    dimensions:
+      width: 480
+      height: 640
+    rotation: 0  # Portrait orientation
+    cs_pin:
+      pca9554: p_c_a
+      number: 2
+    reset_pin:
+      pca9554: p_c_a
+      number: 0
+    de_pin: GPIO40
+    hsync_pin: GPIO38
+    vsync_pin: GPIO39
+    pclk_pin: GPIO41
+    data_rate: 8MHz 
+    
+    # DEFINITIVE 2.8-INCH ST7701S INITIALIZATION SEQUENCE
+    # Translated from Waveshare C driver
+    init_sequence:
+      # --- Page 1 (0x13) Commands ---
+      - [ 0xFF, 0x77, 0x01, 0x00, 0x00, 0x13 ]
+      - [ 0xEF, 0x08 ]
+      # --- Page 0 (0x10) Commands ---
+      - [ 0xFF, 0x77, 0x01, 0x00, 0x00, 0x10 ]
+      - [ 0xC0, 0x4F, 0x00 ]
+      - [ 0xC1, 0x10, 0x02 ]
+      - [ 0xC2, 0x07, 0x02 ]
+      - [ 0xCC, 0x10 ]
+      - [ 0xB0, 0x00, 0x10, 0x17, 0x0D, 0x11, 0x06, 0x05, 0x08, 0x07, 0x1F, 0x04, 0x11, 0x0E, 0x29, 0x30, 0x1F ]
+      - [ 0xB1, 0x00, 0x0D, 0x14, 0x0E, 0x11, 0x06, 0x04, 0x08, 0x08, 0x20, 0x05, 0x13, 0x13, 0x26, 0x30, 0x1F ]
+      # --- Page 2 (0x11) Commands ---
+      - [ 0xFF, 0x77, 0x01, 0x00, 0x00, 0x11 ]
+      - [ 0xB0, 0x65 ]
+      - [ 0xB1, 0x71 ]
+      - [ 0xB2, 0x82 ]
+      - [ 0xB3, 0x80 ]
+      - [ 0xB5, 0x42 ]
+      - [ 0xB7, 0x85 ]
+      - [ 0xB8, 0x20 ]
+      - [ 0xC0, 0x09 ]
+      - [ 0xC1, 0x78 ]
+      - [ 0xC2, 0x78 ]
+      - [ 0xD0, 0x88 ]
+      - [ 0xEE, 0x42 ]
+      - [ 0xE0, 0x00, 0x00, 0x02 ]
+      - [ 0xE1, 0x04, 0xA0, 0x06, 0xA0, 0x05, 0xA0, 0x07, 0xA0, 0x00, 0x44, 0x44 ]
+      - [ 0xE2, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 ]
+      - [ 0xE3, 0x00, 0x00, 0x22, 0x22 ]
+      - [ 0xE4, 0x44, 0x44 ]
+      - [ 0xE5, 0x0C, 0x90, 0xA0, 0xA0, 0x0E, 0x92, 0xA0, 0xA0, 0x08, 0x8C, 0xA0, 0xA0, 0x0A, 0x8E, 0xA0, 0xA0 ]
+      - [ 0xE6, 0x00, 0x00, 0x22, 0x22 ]
+      - [ 0xE7, 0x44, 0x44 ]
+      - [ 0xE8, 0x0D, 0x91, 0xA0, 0xA0, 0x0F, 0x93, 0xA0, 0xA0, 0x09, 0x8D, 0xA0, 0xA0, 0x0B, 0x8F, 0xA0, 0xA0 ]
+      - [ 0xEB, 0x00, 0x00, 0xE4, 0xE4, 0x44, 0x00, 0x40 ]
+      - [ 0xED, 0xFF, 0xF5, 0x47, 0x6F, 0x0B, 0xA1, 0xAB, 0xFF, 0xFF, 0xBA, 0x1A, 0xB0, 0xF6, 0x74, 0x5F, 0xFF ]
+      - [ 0xEF, 0x08, 0x08, 0x08, 0x40, 0x3F, 0x64 ]
+      
+      # --- Final Operational Sequence (CRITICAL) ---
+      - [ 0xFF, 0x77, 0x01, 0x00, 0x00, 0x00 ]  # Revert to Command Page 0
+      - [ 0xFF, 0x77, 0x01, 0x00, 0x00, 0x13 ]  # Page 1
+      - [ 0xE6, 0x16, 0x7C ]
+      - [ 0xE8, 0x00, 0x0E ]
+      - [ 0xFF, 0x77, 0x01, 0x00, 0x00, 0x00 ]  # Page 0
+      - [ 0x11 ]  # Sleep Out
+      - delay 200ms
+      - [ 0xFF, 0x77, 0x01, 0x00, 0x00, 0x13 ]  # Page 1
+      - [ 0xE8, 0x00, 0x0C ]
+      - delay 150ms
+      - [ 0xE8, 0x00, 0x00 ]
+      - [ 0xFF, 0x77, 0x01, 0x00, 0x00, 0x00 ]  # Page 0
+      - [ 0x35, 0x00 ]  # Tearing Effect Line OFF
+      - [ 0x29 ]  # Display ON
+      - delay 100ms
+      # --- LVGL/ESPHome-Specific Commands ---
+      - [ 0x3A, 0x55 ]  # Set Pixel Format to 16-bit RGB (0x55)
+      - [ 0x36, 0x00 ]  # Set Memory Access Control (MADCTL) for portrait
+      
+    data_pins:
+      red:
+        - 46
+        - 3
+        - 8
+        - 18
+        - 17
+      green:
+        - 14
+        - 13
+        - 12
+        - 11
+        - 10
+        - 9
+      blue:
+        - 5
+        - 45
+        - 48
+        - 47
+        - 21
+
+# ── GT911 Touchscreen ───────────────────────────────────────────────────────
+
+touchscreen:
+  - platform: gt911
+    id: my_touchscreen
+    i2c_id: i2c_bus
+    interrupt_pin: GPIO16
+    reset_pin:
+      pca9554: p_c_a
+      number: 1
+
+# ── LVGL Material Design UI ────────────────────────────────────────────────
+
+lvgl:
+  displays:
+    - my_display
+  touchscreens:
+    - my_touchscreen
+  color_depth: 16
+  buffer_size: 25%
+  log_level: WARN
+  byte_order: little_endian
+  
+  pages:
+    - id: main_page
+      widgets:
+        # Main container
+        - obj:
+            width: 100%
+            height: 100%
+            bg_color: 0x121212  # Material Design dark background
+            bg_opa: COVER
+            border_width: 0
+            pad_all: 0
+            widgets:
+              # Header (NOTE: Using BGR color format!)
+              - obj:
+                  width: 100%
+                  height: 80
+                  align: TOP_MID
+                  bg_color: 0x2F2FD3  # Red in BGR format (0xD32F2F in RGB)
+                  bg_opa: COVER
+                  border_width: 0
+                  radius: 0
+                  pad_all: 15
+                  widgets:
+                    - label:
+                        text: "\U000F02DC"
+                        text_font: icons_small
+                        text_color: 0xFFFFFF
+                        align: LEFT_MID
+                    - label:
+                        text: "Smart Home"
+                        text_font: font_medium
+                        text_color: 0xFFFFFF
+                        align: CENTER
+              
+              # Time Card
+              - obj:
+                  width: 90%
+                  height: 160
+                  align: TOP_MID
+                  y: 100
+                  bg_color: 0x2C2C2C
+                  bg_opa: COVER
+                  border_width: 0
+                  radius: 16
+                  pad_all: 20
+                  widgets:
+                    - label:
+                        text: "\U000F0594"  # Weather-night icon
+                        text_font: icons_large
+                        text_color: 0xF9CA90  # Light blue in BGR
+                        align: LEFT_MID
+                        x: 10
+                    - label:
+                        id: lbl_time
+                        text: "--:--"
+                        align: CENTER
+                        text_font: font_large
+                        text_color: 0xFFFFFF
+                        x: 15
+              
+              # Temperature Card
+              - obj:
+                  width: 90%
+                  height: 160
+                  align: TOP_MID
+                  y: 280
+                  bg_color: 0x2C2C2C
+                  bg_opa: COVER
+                  border_width: 0
+                  radius: 16
+                  pad_all: 20
+                  widgets:
+                    - label:
+                        text: "\U000F050F"  # Thermometer icon
+                        text_font: icons_large
+                        text_color: 0x658AFF  # Orange in BGR
+                        align: LEFT_MID
+                        x: 10
+                    - label:
+                        text: "Living Room"
+                        align: TOP_MID
+                        text_font: font_medium
+                        text_color: 0xBBBBBB
+                        x: 15
+                        y: 10
+                    - label:
+                        id: lbl_temp
+                        text: "--°C"
+                        align: BOTTOM_MID
+                        text_font: font_large
+                        text_color: 0xFFFFFF
+                        x: 15
+                        y: -15
+              
+              # Light Control Button
+              - button:
+                  id: btn_light
+                  width: 90%
+                  height: 140
+                  align: TOP_MID
+                  y: 460
+                  bg_color: 0x424242  # Default gray when OFF
+                  border_width: 0
+                  radius: 16
+                  widgets:
+                    - label:
+                        id: lbl_light_icon
+                        text: "\U000F0335"
+                        text_font: icons_large
+                        text_color: 0xFFFFFF
+                        align: LEFT_MID
+                        x: 30
+                    - label:
+                        id: lbl_light_text
+                        text: "Light"
+                        text_font: font_medium
+                        text_color: 0xFFFFFF
+                        align: CENTER
+                        x: 15
+                        y: -20
+                    - label:
+                        id: lbl_light_status
+                        text: "OFF"
+                        text_font: font_small
+                        text_color: 0xAAAAAA
+                        align: CENTER
+                        x: 15
+                        y: 20
+                  on_press:
+                    - homeassistant.service:
+                        service: light.toggle
+                        data:
+                          entity_id: light.YOUR_LIGHT_ENTITY
+
+# ── Time Update Interval ────────────────────────────────────────────────────
+
+interval:
+  - interval: 10s
+    then:
+      - lvgl.label.update:
+          id: lbl_time
+          text: !lambda |-
+            auto t = id(ha_time).now();
+            if (t.is_valid()) {
+              char buf[16];
+              t.strftime(buf, sizeof(buf), "%H:%M");
+              return std::string(buf);
+            }
+            return std::string("--:--");
