@@ -1,425 +1,240 @@
-# Waveshare ESP32-S3 Touch LCD 2.8" Type B - Complete ESPHome Guide
+Waveshare ESP32-S3 Touch LCD 2.8" Type B — Complete ESPHome Guide
 
-This repository documents the complete process of getting the Waveshare ESP32-S3 Touch LCD 2.8" Type B display working with ESPHome, including LVGL GUI, Material Design icons, and dynamic UI elements.
+This repository documents the complete process of getting the Waveshare ESP32-S3 Touch LCD 2.8" Type B working with ESPHome + LVGL, including:
 
-## 🎯 Display Specifications
+✅ Stable RGB display
 
-- **Model**: ESP32-S3 2.8inch Display Development Board Type B
-- **Display Controller**: ST7701S
-- **Resolution**: 480×640 pixels (portrait)
-- **Touch Controller**: GT911
-- **Color Format**: BGR (important for correct colors!)
-- **Interface**: RGB parallel (16-bit)
+✅ GT911 touch
 
-## 📋 Table of Contents
+✅ Material Design UI
 
-1. [Hardware Setup](#hardware-setup)
-2. [The Core Problem](#the-core-problem)
-3. [The Solution](#the-solution)
-4. [Critical Configuration Points](#critical-configuration-points)
-5. [LVGL GUI with Material Design](#lvgl-gui-with-material-design)
-6. [BGR Color Conversion](#bgr-color-conversion)
-7. [Complete Example](#complete-example)
-8. [Troubleshooting](#troubleshooting)
+✅ Home Assistant integration
 
----
+✅ Rock-solid timing (no tearing / flicker)
 
-## 🔧 Hardware Setup
+🎯 Display Specifications
+Item	Value
+Controller	ST7701S
+Resolution	480 × 640 (portrait)
+Interface	16-bit RGB parallel
+Touch	GT911
+I/O Expander	PCA9554 @ 0x20
+Color Order	RGB
+Driver	ESPHome mipi_rgb
+📋 Table of Contents
 
-### Pin Configuration
+Hardware Setup
 
-The display uses the following GPIO pins on the ESP32-S3:
+The Core Problem
 
-```yaml
-# I2C (for touchscreen and PCA9554)
-SDA: GPIO15
-SCL: GPIO07
+The Working Solution
 
-# SPI (for display)
-CLK: GPIO02
-MOSI: GPIO01
+Known-Stable Settings ⭐
 
-# Display Control (via PCA9554 I/O expander)
-CS: PCA9554 Pin 2
-RESET: PCA9554 Pin 0
-Touch RESET: PCA9554 Pin 1
+ST7701 Init Sequence
 
-# RGB Parallel Data
-DE: GPIO40
-HSYNC: GPIO38
-VSYNC: GPIO39
-PCLK: GPIO41
+LVGL GUI
 
-# RGB Data Pins
-RED: [46, 3, 8, 18, 17]
-GREEN: [14, 13, 12, 11, 10, 9]
-BLUE: [5, 45, 48, 47, 21]
+Troubleshooting
 
-# Backlight
-PWM: GPIO06
+🔧 Hardware Setup
+Pin Configuration
+I²C
+SDA → GPIO15  
+SCL → GPIO7
 
-# Touch Interrupt
-INT: GPIO16
-```
+SPI (used for ST7701 init only)
+CLK  → GPIO2  
+MOSI → GPIO1
 
----
+Control (via PCA9554)
+LCD RESET   → P0  
+TOUCH RESET → P1  
+LCD CS      → P2
 
-## 🚨 The Core Problem
+RGB Timing
+DE    → GPIO40  
+HSYNC → GPIO38  
+VSYNC → GPIO39  
+PCLK  → GPIO41
 
-The ST7701S display controller requires a **vendor-specific initialization sequence**. Using generic or incomplete sequences results in:
-- Display powers on but remains black/white
-- Backlight works but no pixels display
-- Touch may or may not work
+RGB Data
+RED   → [46, 3, 8, 18, 17]  
+GREEN → [14, 13, 12, 11, 10, 9]  
+BLUE  → [5, 45, 48, 47, 21]
 
-### Why Generic Sequences Fail
+Backlight
+GPIO6 (LEDC PWM @ 20 kHz)
 
-The ST7701S is a complex controller requiring:
-1. Multi-page register access (pages 0x10, 0x11, 0x13)
-2. Precise gamma correction settings
-3. Power control sequences
-4. Clock and timing configurations
-5. Specific VCOM voltage settings
+Touch Interrupt
+GPIO16
 
-Missing even one command or using wrong timing can prevent the display from working.
+🚨 The Core Problem
 
----
+The ST7701S:
 
-## ✅ The Solution
+Does NOT work with generic configs
 
-### 1. The Correct Init Sequence
+Requires a vendor init sequence
 
-The working initialization sequence was extracted from Waveshare's C driver for the 2.8" display. Key points:
+Needs correct RGB timing
 
-```yaml
-init_sequence:
-  # Page switching and configuration
-  - [ 0xFF, 0x77, 0x01, 0x00, 0x00, 0x13 ]  # Page 1
-  - [ 0xEF, 0x08 ]
-  
-  # ... (full sequence in example YAML)
-  
-  # CRITICAL FINAL COMMANDS:
-  - [ 0x11 ]      # Sleep Out
-  - delay 200ms   # MUST wait for power stabilization
-  - [ 0x29 ]      # Display ON
-  - delay 100ms
-  - [ 0x3A, 0x55 ] # 16-bit color
-  - [ 0x36, 0x00 ] # Portrait orientation
-```
+Is sensitive to pixel clock stability
 
-### 2. The VCOM Power Delay
+Symptoms of incorrect setup:
 
-**This is the #1 reason for failure even with correct init sequence!**
+Backlight on, no image
 
-The display needs time to charge internal voltage pumps before initialization:
+Rolling / flickering display
 
-```yaml
-esphome:
-  on_boot:
-    - then: 
-        - delay: 10s          # Wait for VCOM to stabilize
-        - wifi.enable:        # Only then enable WiFi
-        - delay: 1s
-```
+Random LVGL crashes
 
-Without this delay:
-- Display may flash and die
-- Random crashes and reboots
-- Guru Meditation errors
+✅ The Working Solution
 
-### 3. WiFi Must Be Disabled on Boot
+This display is 100 % stable using:
 
-```yaml
-wifi:
-  enable_on_boot: false  # CRITICAL!
-```
+platform: mipi_rgb
 
-This prevents WiFi from drawing power during the critical VCOM stabilization period.
+PCA9554 for reset & CS
 
----
+Correct vendor init sequence
 
-## 🎨 Critical Configuration Points
+Reduced pixel clock
 
-### A. Color Order: BGR
+⚠️ With this method:
 
-This display uses **BGR color order**, not RGB. This is critical for LVGL:
+❌ No 10-second VCOM delay required
+❌ No Wi-Fi boot delay required
 
-```yaml
-display:
-  - platform: st7701s
-    color_order: bgr  # NOT rgb!
-```
+⭐ Known-Stable Settings
 
-### B. Portrait Orientation
+These are the magic numbers for a rock-solid display:
 
-For 480×640 portrait mode:
+pclk_frequency: 16MHz
+data_rate: 80MHz
 
-```yaml
-dimensions:
-  width: 480
-  height: 640
-rotation: 0  # Portrait
-```
-
-The MADCTL command must match:
-```yaml
-- [ 0x36, 0x00 ]  # Portrait: 0x00
-```
-
-For landscape (640×480), use:
-```yaml
-rotation: 90
-- [ 0x36, 0xA0 ]  # Landscape: 0xA0
-```
-
-### C. PSRAM Configuration
-
-The ESP32-S3 needs proper PSRAM settings for smooth LVGL operation:
-
-```yaml
-esp32:
-  framework:
-    type: esp-idf
-    sdkconfig_options:
-      CONFIG_SPIRAM: y
-      CONFIG_SPIRAM_MODE_OCT: y
-      CONFIG_SPIRAM_SPEED_80M: y
-      CONFIG_SPIRAM_USE_MALLOC: y
-      # ... (see full config)
-```
-
-### D. LVGL Buffer Size
-
-```yaml
 lvgl:
-  buffer_size: 25%  # Good balance of memory and performance
-  byte_order: little_endian
-```
+  buffer_size: 35%
 
----
+wifi:
+  power_save_mode: none
 
-## 🎨 LVGL GUI with Material Design
 
-### Material Design Icons
+Result:
 
-To use Material Design Icons in your UI:
+No tearing
 
-```yaml
+No flicker
+
+No periodic glitches
+
+📺 ST7701 Init Sequence (Waveshare ESP32-S3 2.8B)
+
+This is the exact vendor sequence extracted from the Waveshare C driver.
+
+<details> <summary>Click to expand</summary>
+init_sequence:
+  - [0xFF,0x77,0x01,0x00,0x00,0x13]
+  - [0xEF,0x08]
+
+  - [0xFF,0x77,0x01,0x00,0x00,0x10]
+  - [0xC0,0x4F,0x00]
+  - [0xC1,0x10,0x02]
+  - [0xC2,0x07,0x02]
+  - [0xCC,0x10]
+
+  - [0xB0,0x00,0x10,0x17,0x0D,0x11,0x06,0x05,0x08,0x07,0x1F,0x04,0x11,0x0E,0x29,0x30,0x1F]
+  - [0xB1,0x00,0x0D,0x14,0x0E,0x11,0x06,0x04,0x08,0x08,0x20,0x05,0x13,0x13,0x26,0x30,0x1F]
+
+  - [0xFF,0x77,0x01,0x00,0x00,0x11]
+  - [0xB0,0x65]
+  - [0xB1,0x71]
+  - [0xB2,0x82]
+  - [0xB3,0x80]
+  - [0xB5,0x42]
+  - [0xB7,0x85]
+  - [0xB8,0x20]
+  - [0xC0,0x09]
+  - [0xC1,0x78]
+  - [0xC2,0x78]
+  - [0xD0,0x88]
+  - [0xEE,0x42]
+
+  - [0x11]
+  - delay 200ms
+  - [0x35,0x00]
+
+</details>
+🎨 LVGL GUI
+
+Material Design icons work normally:
+
 font:
   - file: https://github.com/Templarian/MaterialDesign-Webfont/raw/master/fonts/materialdesignicons-webfont.ttf
-    id: icons_large
-    size: 48
-    bpp: 2
-    glyphs: [
-      "\U000F0594",  # mdi-weather-night
-      "\U000F050F",  # mdi-thermometer
-      "\U000F0335",  # mdi-lightbulb
-    ]
-```
 
-Find icon codes at: https://pictogrammers.com/library/mdi/
 
-### Dynamic Button Colors
+Dynamic UI updates via Home Assistant sensors are fully supported.
 
-Create buttons that change color based on state:
+🔍 Troubleshooting
+Black Screen
 
-```yaml
-binary_sensor:
-  - platform: homeassistant
-    id: light_state
-    entity_id: light.your_light
-    on_state:
-      then:
-        - if:
-            condition:
-              binary_sensor.is_on: light_state
-            then:
-              # Yellow when ON (remember BGR format!)
-              - lvgl.widget.update:
-                  id: btn_light
-                  bg_color: 0x3BEBFF  # Yellow in BGR
-              - lvgl.label.update:
-                  id: lbl_status
-                  text: "ON"
-            else:
-              # Gray when OFF
-              - lvgl.widget.update:
-                  id: btn_light
-                  bg_color: 0x424242
-              - lvgl.label.update:
-                  id: lbl_status
-                  text: "OFF"
-```
+✅ Check:
 
----
+mipi_rgb (NOT st7701s / rpi_dpi_rgb)
 
-## 🎨 BGR Color Conversion
+PCA9554 detected at 0x20
 
-**CRITICAL**: This display uses BGR, so RGB colors must be converted!
+Correct init sequence
 
-### Color Conversion Formula
+Backlight GPIO6
 
-RGB color `0xRRGGBB` becomes BGR `0xBBGGRR`
+Periodic Glitch / Tear
 
-### Common Color Conversions
+Lower pixel clock:
 
-| Color | RGB Code | BGR Code | Usage |
-|-------|----------|----------|-------|
-| Red | `0xD32F2F` | `0x2F2FD3` | Header background |
-| Orange | `0xFF8A65` | `0x658AFF` | Thermometer icon |
-| Light Blue | `0x90CAF9` | `0xF9CA90` | Moon icon |
-| Yellow | `0xFFEB3B` | `0x3BEBFF` | Button ON state |
-| White | `0xFFFFFF` | `0xFFFFFF` | Text (symmetric) |
-| Gray | `0x424242` | `0x424242` | Cards (symmetric) |
-| Black | `0x000000` | `0x000000` | Background (symmetric) |
+pclk_frequency: 16MHz
 
-### Example: Red Header
+Random Crashes
 
-**Wrong (will show as cyan):**
-```yaml
-bg_color: 0xD32F2F  # Red in RGB
-```
+Enable PSRAM
 
-**Correct (shows as red):**
-```yaml
-bg_color: 0x2F2FD3  # Red in BGR
-```
+Use buffer ≤ 35 %
 
----
+Touch Not Working
 
-## 📦 Complete Example
+Confirm GT911 @ 0x5D
 
-See `waveshare-material-design-anonymized.yaml` for a complete working example featuring:
+Verify interrupt pin = GPIO16
 
-- ✅ Material Design dark theme
-- ✅ Material Design icons (home, clock, thermometer, lightbulb)
-- ✅ Dynamic button that changes from gray to yellow when light turns on
-- ✅ Proper BGR color handling
-- ✅ Home Assistant integration
-- ✅ Touch support
-- ✅ Time display
-- ✅ Temperature sensor display
-- ✅ Light control with visual feedback
+Ensure touch reset via PCA9554
 
----
+🎓 Key Takeaways
 
-## 🔍 Troubleshooting
+✔ Use mipi_rgb
+✔ Vendor init sequence is mandatory
+✔ 16 MHz pixel clock = stability
+✔ PCA9554 control is required
+✔ LVGL in PSRAM for smooth UI
 
-### Display is Black/White
+📚 Resources
 
-**Symptoms**: Backlight works, but no image
-**Causes**:
-1. Wrong init sequence
-2. Insufficient VCOM delay
-3. WiFi enabled too early
+ESPHome
+https://esphome.io/
 
-**Solutions**:
-- Use the exact init sequence from this repo
-- Ensure 10s delay in `on_boot`
-- Set `enable_on_boot: false` for WiFi
+LVGL
+https://lvgl.io/
 
-### Wrong Colors Displayed
+Waveshare Wiki
+https://www.waveshare.com/wiki/ESP32-S3-Touch-LCD-2.8B
 
-**Symptoms**: Red shows as cyan, blue shows as yellow, etc.
-**Cause**: Not using BGR color format
+🙏 Credits
 
-**Solution**: Convert all RGB colors to BGR using formula: `0xRRGGBB` → `0xBBGGRR`
+Waveshare (C driver reference)
 
-### Touch Not Working
+ESPHome display component developers
 
-**Symptoms**: Display works but touch doesn't respond
-**Causes**:
-1. GT911 not properly initialized
-2. Touch interrupt pin not configured
-3. Touch reset pin not toggled
+LVGL project
 
-**Solutions**:
-- Ensure I2C is working (`scan: true`)
-- Check PCA9554 is detected
-- Verify touch reset pin configuration
+⭐ Contributing
 
-### Guru Meditation Errors / Crashes
-
-**Symptoms**: Random crashes, memory errors, device reboots
-**Causes**:
-1. PSRAM not configured correctly
-2. LVGL buffer too large
-3. Memory allocation issues
-4. WiFi interfering with display init
-
-**Solutions**:
-- Use recommended PSRAM settings
-- Reduce buffer_size to 20-25%
-- Ensure proper `on_boot` sequence
-- Monitor logs for memory issues
-
-### Icons Not Displaying
-
-**Symptoms**: Boxes or wrong symbols instead of icons
-**Causes**:
-1. Wrong unicode code
-2. Icon not in font glyphs list
-3. Icon font not loading
-
-**Solutions**:
-- Verify unicode from https://pictogrammers.com/library/mdi/
-- Add icon to glyphs list
-- Check font file downloads successfully
-
-### Layout Issues / Text Overlapping
-
-**Symptoms**: Text squashed together, elements overlapping
-**Causes**:
-1. Wrong positioning (x/y values)
-2. Font size too large
-3. Card height too small
-
-**Solutions**:
-- Use TOP_MID/BOTTOM_MID alignment with appropriate y offsets
-- Reduce font sizes
-- Increase card heights
-- Test different pad_all values
-
----
-
-## 🎓 Key Takeaways
-
-1. **The init sequence is everything** - Use the exact sequence from Waveshare's C driver
-2. **VCOM delay is critical** - Always wait 10s before WiFi
-3. **BGR not RGB** - Convert all colors or they'll display wrong
-4. **WiFi disable on boot** - Prevents power issues during init
-5. **PSRAM configuration matters** - Use the recommended settings for smooth LVGL
-6. **Portrait vs Landscape** - MADCTL byte must match rotation setting
-7. **Touch needs reset** - GT911 requires proper PCA9554 pin toggling
-
----
-
-## 📚 Resources
-
-- **ESPHome Documentation**: https://esphome.io/components/display/st7701s
-- **LVGL Documentation**: https://docs.lvgl.io/
-- **Material Design Icons**: https://pictogrammers.com/library/mdi/
-- **Waveshare Wiki**: https://www.waveshare.com/wiki/ESP32-S3-Touch-LCD-2.8B
-
----
-
-## 🙏 Credits
-
-This configuration was developed through extensive testing and debugging to create a fully working Material Design interface for the Waveshare ESP32-S3 Touch LCD 2.8" Type B display.
-
-Special thanks to:
-- Waveshare for the C driver source code
-- ESPHome community for the ST7701S component
-- Material Design Icons project
-
----
-
-## 📝 License
-
-This configuration is provided as-is for educational purposes. Feel free to use and modify for your own projects.
-
----
-
-## ⭐ Contributing
-
-Found an issue or improvement? Please open an issue or pull request!
+PRs & improvements welcome!
