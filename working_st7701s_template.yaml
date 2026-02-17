@@ -6,409 +6,400 @@
 # Display: ST7701S RGB interface with 16-bit parallel data
 # Touch: GT911 capacitive touch controller via I2C
 # 
-# CRITICAL SUCCESS FACTORS:
-# 1. 10-second boot delay for display VCOM stabilization before WiFi
-# 2. Proper ST7701S initialization sequence from Waveshare demo code
-# 3. PSRAM settings rolled back (no instructions/rodata in PSRAM for stability)
-# 4. 20% LVGL buffer with 16-bit color depth
-# 5. WiFi delayed startup to avoid memory conflicts with LVGL
-# ══════════════════════════════════════════════════════════════════════════════
+substitutions:
+  name: tommy-kincony-display
+  friendly_name: "Tommy Kincony Display"
 
 esphome:
-  name: waveshare-esp32s3-touch-28
-  friendly_name: Waveshare Touch Display
-  
-  # CRITICAL: Delay Wi-Fi startup to allow display VCOM charge pump to stabilize
-  # This prevents display artifacts and ensures stable LVGL rendering
+  name: ${name}
+  friendly_name: ${friendly_name}
   on_boot:
-    - then: 
-        - logger.log: "Waiting 10s for Display VCOM to fully stabilize..."
-        - delay: 10s 
-        - logger.log: "Display stabilized. Starting Wi-Fi..."
-        - wifi.enable: 
-        - delay: 1s
+    priority: 600
+    then:
+      - light.turn_on:
+          id: backlight
+          brightness: 100%
+      - lvgl.page.show: main_page
+      - script.execute: user_activity
 
 esp32:
   board: esp32-s3-devkitc-1
-  flash_size: 16MB
   variant: esp32s3
+  flash_size: 16MB
   framework:
     type: esp-idf
-    version: recommended
-    sdkconfig_options:
-      # Flash configuration
-      CONFIG_ESPTOOLPY_FLASHSIZE_16MB: y
-      CONFIG_ESPTOOLPY_FLASHFREQ_80M: y
-      CONFIG_ESPTOOLPY_FLASHMODE_QIO: y
-      
-      # CPU frequency
-      CONFIG_ESP_DEFAULT_CPU_FREQ_240: y
-      CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240: y
-      CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ: "240"
-      
-      # PSRAM settings - STABLE CONFIGURATION
-      # NOTE: DO NOT enable FETCH_INSTRUCTIONS or RODATA in PSRAM
-      # This causes instability with large displays + WiFi + LVGL
-      CONFIG_SPIRAM: y
-      CONFIG_SPIRAM_MODE_OCT: y
-      CONFIG_SPIRAM_SPEED_80M: y
-      CONFIG_SPIRAM_BOOT_INIT: y
-      CONFIG_SPIRAM_USE_CAPS_ALLOC: y
-      CONFIG_SPIRAM_IGNORE_NOTFOUND: n
-      CONFIG_SPIRAM_FETCH_INSTRUCTIONS: n  # Keep disabled for stability
-      CONFIG_SPIRAM_RODATA: n              # Keep disabled for stability
-      CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL: "8192"
-      CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL: "65536"  # 64KB reserved internal
-      CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP: y
-      CONFIG_SPIRAM_USE_MALLOC: y
-      
-      # Cache configuration
-      CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB: y
-      CONFIG_ESP32S3_DATA_CACHE_64KB: y
-      CONFIG_ESP32S3_ICACHE_ASSOCIATED_WAYS_8: y
-      CONFIG_ESP32S3_DCACHE_ASSOCIATED_WAYS_8: y
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Core Components
-# ══════════════════════════════════════════════════════════════════════════════
+psram:
+  mode: octal
+  speed: 80MHz
 
 logger:
-  level: WARN
-  hardware_uart: USB_SERIAL_JTAG
-
-safe_mode:
-  num_attempts: 15
-  reboot_timeout: 10min
 
 api:
   encryption:
     key: !secret api_encryption_key
 
 ota:
-  - platform: esphome
-    password: !secret ota_password
+  platform: esphome
+  password: !secret ota_password
 
 wifi:
-  ssid: !secret wifi_ssid
-  password: !secret wifi_password
-  enable_on_boot: false  # CRITICAL: WiFi must not start automatically
-  ap:
-    ssid: "Waveshare-Display-AP"
-    password: "changeme123"
+  ssid: eir92262635
+  password: DKKUGnvVpn
+  power_save_mode: none
 
-captive_portal:
-
-# ══════════════════════════════════════════════════════════════════════════════
-# Hardware Configuration
-# ══════════════════════════════════════════════════════════════════════════════
-
-# I2C Bus - Used for PCA9554 IO expander and GT911 touch controller
 i2c:
-  - id: i2c_bus
-    sda: GPIO15
-    scl: GPIO07
-    scan: true
+  id: i2c_bus
+  sda: GPIO15
+  scl: GPIO7
+  frequency: 800kHz
+  scan: true
 
-# SPI Bus - Used for ST7701S command interface
-spi:
-  - id: spi_lcd
-    clk_pin: GPIO02
-    mosi_pin: GPIO01
-    interface: spi3
-
-# PCA9554 IO Expander - Controls LCD reset, touch reset, and LCD CS
 pca9554:
-  - id: p_c_a
-    address: 0x20
+  - id: exio
     i2c_id: i2c_bus
+    address: 0x20
+    pin_count: 8
 
-# Backlight PWM Control
+spi:
+  id: lcd_spi
+  clk_pin: GPIO2
+  mosi_pin: GPIO1
+
 output:
   - platform: ledc
-    pin: GPIO06
-    id: lcd_backlight_pwm
-    frequency: 2000Hz
-    channel: 0
+    id: backlight_pwm
+    pin: GPIO6
+    frequency: 20000 Hz
 
 light:
   - platform: monochromatic
-    output: lcd_backlight_pwm
-    name: "Display Backlight"
-    id: display_backlight
+    id: backlight
+    name: "LCD Backlight"
+    output: backlight_pwm
     restore_mode: ALWAYS_ON
-    default_transition_length: 0s
-    gamma_correct: 1
+    default_transition_length: 0ms
+    gamma_correct: 1.0
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Fonts for LVGL
-# ══════════════════════════════════════════════════════════════════════════════
+# =========================
+# Touch (GT911) + wake
+# =========================
+touchscreen:
+  - platform: gt911
+    id: touch
+    i2c_id: i2c_bus
+    address: 0x5D
+    interrupt_pin: GPIO16
+    reset_pin:
+      pca9554: exio
+      number: 1
+    on_touch:
+      then:
+        - script.execute: user_activity
+
+display:
+  - platform: mipi_rgb
+    id: lcd
+    model: CUSTOM
+    spi_id: lcd_spi
+
+    cs_pin:
+      pca9554: exio
+      number: 2
+    reset_pin:
+      pca9554: exio
+      number: 0
+
+    data_rate: 80MHz
+    spi_mode: MODE0
+    color_order: RGB
+    invert_colors: false
+
+    dimensions:
+      width: 480
+      height: 640
+
+    # ROCK STEADY SETTINGS
+    pclk_frequency: 16MHz
+    pclk_inverted: false
+
+    hsync_pulse_width: 10
+    hsync_back_porch: 70
+    hsync_front_porch: 60
+    vsync_pulse_width: 10
+    vsync_back_porch: 20
+    vsync_front_porch: 20
+
+    de_pin: GPIO40
+    hsync_pin: GPIO38
+    vsync_pin: GPIO39
+    pclk_pin: GPIO41
+
+    data_pins:
+      red:   [GPIO46, GPIO3, GPIO8, GPIO18, GPIO17]
+      green: [GPIO14, GPIO13, GPIO12, GPIO11, GPIO10, GPIO9]
+      blue:  [GPIO5, GPIO45, GPIO48, GPIO47, GPIO21]
+
+    init_sequence:
+      - [0xFF, 0x77, 0x01, 0x00, 0x00, 0x13]
+      - [0xEF, 0x08]
+      - [0xFF, 0x77, 0x01, 0x00, 0x00, 0x10]
+      - [0xC0, 0x4F, 0x00]
+      - [0xC1, 0x10, 0x02]
+      - [0xC2, 0x07, 0x02]
+      - [0xCC, 0x10]
+      - [0xB0, 0x00, 0x10, 0x17, 0x0D, 0x11, 0x06, 0x05, 0x08, 0x07, 0x1F, 0x04, 0x11, 0x0E, 0x29, 0x30, 0x1F]
+      - [0xB1, 0x00, 0x0D, 0x14, 0x0E, 0x11, 0x06, 0x04, 0x08, 0x08, 0x20, 0x05, 0x13, 0x13, 0x26, 0x30, 0x1F]
+      - [0xFF, 0x77, 0x01, 0x00, 0x00, 0x11]
+      - [0xB0, 0x65]
+      - [0xB1, 0x71]
+      - [0xB2, 0x82]
+      - [0xB3, 0x80]
+      - [0xB5, 0x42]
+      - [0xB7, 0x85]
+      - [0xB8, 0x20]
+      - [0xC0, 0x09]
+      - [0xC1, 0x78]
+      - [0xC2, 0x78]
+      - [0xD0, 0x88]
+      - [0xEE, 0x42]
+      - [0xE0, 0x00, 0x00, 0x02]
+      - [0xE1, 0x04, 0xA0, 0x06, 0xA0, 0x05, 0xA0, 0x07, 0xA0, 0x00, 0x44, 0x44]
+      - [0xE2, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
+      - [0xE3, 0x00, 0x00, 0x22, 0x22]
+      - [0xE4, 0x44, 0x44]
+      - [0xE5, 0x0C, 0x90, 0xA0, 0xA0, 0x0E, 0x92, 0xA0, 0xA0, 0x08, 0x8C, 0xA0, 0xA0, 0x0A, 0x8E, 0xA0, 0xA0]
+      - [0xE6, 0x00, 0x00, 0x22, 0x22]
+      - [0xE7, 0x44, 0x44]
+      - [0xE8, 0x0D, 0x91, 0xA0, 0xA0, 0x0F, 0x93, 0xA0, 0xA0, 0x09, 0x8D, 0xA0, 0xA0, 0x0B, 0x8F, 0xA0, 0xA0]
+      - [0xEB, 0x00, 0x00, 0xE4, 0xE4, 0x44, 0x00, 0x40]
+      - [0xED, 0xFF, 0xF5, 0x47, 0x6F, 0x0B, 0xA1, 0xAB, 0xFF, 0xFF, 0xBA, 0x1A, 0xB0, 0xF6, 0x74, 0x5F, 0xFF]
+      - [0xEF, 0x08, 0x08, 0x08, 0x40, 0x3F, 0x64]
+      - [0xFF, 0x77, 0x01, 0x00, 0x00, 0x00]
+      - [0xFF, 0x77, 0x01, 0x00, 0x00, 0x13]
+      - [0xE6, 0x16, 0x7C]
+      - [0xE8, 0x00, 0x0E]
+      - [0xFF, 0x77, 0x01, 0x00, 0x00, 0x00]
+      - [0x11]
+      - delay 200ms
+      - [0xFF, 0x77, 0x01, 0x00, 0x00, 0x13]
+      - [0xE8, 0x00, 0x0C]
+      - delay 150ms
+      - [0xE8, 0x00, 0x00]
+      - [0xFF, 0x77, 0x01, 0x00, 0x00, 0x00]
+      - [0x35, 0x00]
 
 font:
-  - file: "gfonts://Roboto"
+  - file: "gfonts://Inter"
     id: font_small
-    size: 20
-    glyphs: "!%()+=,-_.:°0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz"
-  - file: "gfonts://Roboto"
+    size: 18
+    bpp: 2
+  - file: "gfonts://Inter"
+    id: font_medium
+    size: 24
+    bpp: 2
+  - file: "gfonts://Inter"
     id: font_large
-    size: 48
-    glyphs: "!%()+=,-_.:°0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz"
-
-# ══════════════════════════════════════════════════════════════════════════════
-# Time and Example Sensor
-# ══════════════════════════════════════════════════════════════════════════════
+    size: 36
+    bpp: 2
+  - file: "gfonts://Inter"
+    id: font_sleep
+    size: 66
+    bpp: 2
 
 time:
   - platform: homeassistant
     id: ha_time
 
-# Example sensor - replace with your own
 sensor:
   - platform: homeassistant
-    id: room_temperature
-    entity_id: sensor.living_room_temperature  # Replace with your sensor
+    id: immersion_watts
+    entity_id: sensor.0xa4c13874272b4470_power_b
     on_value:
       then:
         - lvgl.label.update:
-            id: lbl_temp
+            id: lbl_watts
             text: !lambda |-
-              char buf[32];
-              snprintf(buf, sizeof(buf), "%.1f°C", x);
+              char buf[16];
+              snprintf(buf, sizeof(buf), "%.0fW", x);
               return std::string(buf);
 
-# ══════════════════════════════════════════════════════════════════════════════
-# ST7701S Display with LVGL
-# ══════════════════════════════════════════════════════════════════════════════
+  - platform: homeassistant
+    id: immersion_amps
+    entity_id: sensor.0xa4c13874272b4470_current_b
+    on_value:
+      then:
+        - lvgl.label.update:
+            id: lbl_amps
+            text: !lambda |-
+              char buf[16];
+              snprintf(buf, sizeof(buf), "%.2fA", x);
+              return std::string(buf);
 
-display:
-  - platform: st7701s
-    id: my_display
-    spi_id: spi_lcd
-    spi_mode: MODE1
-    color_order: bgr  # BGR byte order for correct colors
-    auto_clear_enabled: false  # Required for LVGL compatibility
-    update_interval: never  # LVGL handles updates
-    dimensions:
-      width: 480
-      height: 640
-    rotation: 90  # Landscape orientation (640x480 effective)
-    data_rate: 8MHz  # SPI speed for command interface
-    
-    # Control pins via PCA9554 IO expander
-    cs_pin:
-      pca9554: p_c_a
-      number: 2  # LCD_CS
-    reset_pin:
-      pca9554: p_c_a
-      number: 0  # LCD_RST
-    
-    # RGB interface pins
-    de_pin: GPIO40
-    hsync_pin: GPIO38
-    vsync_pin: GPIO39
-    pclk_pin: GPIO41
-    
-    # DEFINITIVE ST7701S INITIALIZATION SEQUENCE
-    # Source: Waveshare demo code for 2.8" display
-    init_sequence:
-      # Page 1 commands
-      - [ 0xFF, 0x77, 0x01, 0x00, 0x00, 0x13 ]
-      - [ 0xEF, 0x08 ]
+# =========================
+# Idle / Sleep logic
+# =========================
+globals:
+  - id: last_touch_ms
+    type: uint32_t
+    restore_value: no
+    initial_value: "0"
+  - id: is_sleeping
+    type: bool
+    restore_value: no
+    initial_value: "false"
 
-      # Page 0 commands - Display settings
-      - [ 0xFF, 0x77, 0x01, 0x00, 0x00, 0x10 ]
-      - [ 0xC0, 0x4F, 0x00 ]
-      - [ 0xC1, 0x10, 0x02 ]
-      - [ 0xC2, 0x07, 0x02 ]
-      - [ 0xCC, 0x10 ]
-      - [ 0xB0, 0x00, 0x10, 0x17, 0x0D, 0x11, 0x06, 0x05, 0x08, 0x07, 0x1F, 0x04, 0x11, 0x0E, 0x29, 0x30, 0x1F ]
-      - [ 0xB1, 0x00, 0x0D, 0x14, 0x0E, 0x11, 0x06, 0x04, 0x08, 0x08, 0x20, 0x05, 0x13, 0x13, 0x26, 0x30, 0x1F ]
+script:
+  - id: user_activity
+    mode: restart
+    then:
+      - lambda: |-
+          id(last_touch_ms) = millis();
+          if (id(is_sleeping)) {
+            id(is_sleeping) = false;
+          }
+      - lvgl.page.show: main_page
+      - light.turn_on:
+          id: backlight
+          brightness: 100%
 
-      # Page 2 commands - Timing and power
-      - [ 0xFF, 0x77, 0x01, 0x00, 0x00, 0x11 ]
-      - [ 0xB0, 0x65 ]
-      - [ 0xB1, 0x71 ]
-      - [ 0xB2, 0x82 ]
-      - [ 0xB3, 0x80 ]
-      - [ 0xB5, 0x42 ]
-      - [ 0xB7, 0x85 ]
-      - [ 0xB8, 0x20 ]
-      - [ 0xC0, 0x09 ]
-      - [ 0xC1, 0x78 ]
-      - [ 0xC2, 0x78 ]
-      - [ 0xD0, 0x88 ]
-      - [ 0xEE, 0x42 ]
-      - [ 0xE0, 0x00, 0x00, 0x02 ]
-      - [ 0xE1, 0x04, 0xA0, 0x06, 0xA0, 0x05, 0xA0, 0x07, 0xA0, 0x00, 0x44, 0x44 ]
-      - [ 0xE2, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 ]
-      - [ 0xE3, 0x00, 0x00, 0x22, 0x22 ]
-      - [ 0xE4, 0x44, 0x44 ]
-      - [ 0xE5, 0x0C, 0x90, 0xA0, 0xA0, 0x0E, 0x92, 0xA0, 0xA0, 0x08, 0x8C, 0xA0, 0xA0, 0x0A, 0x8E, 0xA0, 0xA0 ]
-      - [ 0xE6, 0x00, 0x00, 0x22, 0x22 ]
-      - [ 0xE7, 0x44, 0x44 ]
-      - [ 0xE8, 0x0D, 0x91, 0xA0, 0xA0, 0x0F, 0x93, 0xA0, 0xA0, 0x09, 0x8D, 0xA0, 0xA0, 0x0B, 0x8F, 0xA0, 0xA0 ]
-      - [ 0xEB, 0x00, 0x00, 0xE4, 0xE4, 0x44, 0x00, 0x40 ]
-      - [ 0xED, 0xFF, 0xF5, 0x47, 0x6F, 0x0B, 0xA1, 0xAB, 0xFF, 0xFF, 0xBA, 0x1A, 0xB0, 0xF6, 0x74, 0x5F, 0xFF ]
-      - [ 0xEF, 0x08, 0x08, 0x08, 0x40, 0x3F, 0x64 ]
-      
-      # Return to page 0
-      - [ 0xFF, 0x77, 0x01, 0x00, 0x00, 0x00 ]
+  - id: go_to_sleep
+    mode: restart
+    then:
+      - lambda: |-
+          id(is_sleeping) = true;
+      - lvgl.page.show: sleep_page
+      # dim to a visible-but-not-blinding level
+      - light.turn_on:
+          id: backlight
+          brightness: 8%
 
-      # VCOM stabilization sequence
-      - [ 0xFF, 0x77, 0x01, 0x00, 0x00, 0x13 ]
-      - [ 0xE6, 0x16, 0x7C ]
-      - [ 0xE8, 0x00, 0x0E ]
-      - [ 0xFF, 0x77, 0x01, 0x00, 0x00, 0x00 ]
+interval:
+  # update the time while awake
+  - interval: 10s
+    then:
+      - if:
+          condition:
+            lambda: 'return !id(is_sleeping);'
+          then:
+            - lvgl.label.update:
+                id: lbl_time
+                text: !lambda |-
+                  auto t = id(ha_time).now();
+                  if (!t.is_valid()) return std::string("--:--");
+                  char buf[8];
+                  snprintf(buf, sizeof(buf), "%02d:%02d", t.hour, t.minute);
+                  return std::string(buf);
 
-      # Sleep out
-      - [ 0x11 ]
-      - delay 200ms
-
-      # Additional VCOM stabilization
-      - [ 0xFF, 0x77, 0x01, 0x00, 0x00, 0x13 ]
-      - [ 0xE8, 0x00, 0x0C ]
-      - delay 150ms
-      - [ 0xE8, 0x00, 0x00 ]
-      - [ 0xFF, 0x77, 0x01, 0x00, 0x00, 0x00 ]
-
-      # Tearing effect line off
-      - [ 0x35, 0x00 ] 
-      
-      # Display on
-      - [ 0x29 ]
-      - delay 100ms
-
-      # CRITICAL: Set pixel format to 16-bit RGB565 for LVGL
-      - [ 0x3A, 0x55 ]
-      
-      # CRITICAL: Set rotation to 90 degrees (landscape)
-      # MADCTL: MV=1, MY=1, BGR=1 = 0xA0
-      - [ 0x36, 0xA0 ]
-    
-    # 16-bit RGB parallel data pins
-    data_pins:
-      red:
-        - 46  # R3
-        - 3   # R4
-        - 8   # R5
-        - 18  # R6
-        - 17  # R7
-      green:
-        - 14  # G2
-        - 13  # G3
-        - 12  # G4
-        - 11  # G5
-        - 10  # G6
-        - 9   # G7
-      blue:
-        - 5   # B3
-        - 45  # B4
-        - 48  # B5
-        - 47  # B6
-        - 21  # B7
-
-# GT911 Capacitive Touch Controller
-touchscreen:
-  - platform: gt911
-    id: my_touchscreen
-    i2c_id: i2c_bus
-    interrupt_pin: GPIO16
-    reset_pin:
-      pca9554: p_c_a
-      number: 1  # TP_RST
-
-# ══════════════════════════════════════════════════════════════════════════════
-# LVGL Configuration
-# ══════════════════════════════════════════════════════════════════════════════
+  # sleep timer check (30s)
+  - interval: 500ms
+    then:
+      - if:
+          condition:
+            lambda: |-
+              if (id(is_sleeping)) return false;
+              uint32_t elapsed = millis() - id(last_touch_ms);
+              return elapsed > 30000;
+          then:
+            - script.execute: go_to_sleep
 
 lvgl:
+  log_level: WARN
+  buffer_size: 35%
   displays:
-    - my_display
-  touchscreens:
-    - my_touchscreen
-  color_depth: 16  # RGB565 format
-  buffer_size: 20%  # 20% of display buffer (works well with 8MB PSRAM)
-  log_level: NONE  # Reduce logging overhead
-  byte_order: little_endian
-  
+    - lcd
+
   pages:
     - id: main_page
+      bg_color: 0x000000
       widgets:
         - obj:
             width: 100%
             height: 100%
             bg_color: 0x000000
-            bg_opa: COVER
             border_width: 0
-            pad_all: 20
+            pad_all: 0
             widgets:
-              - label:
-                  id: lbl_title
-                  text: "Touch Display"
+
+              - obj:
+                  width: 100%
+                  height: 80
                   align: TOP_MID
-                  text_font: font_large
-                  text_color: 0xFFFFFF
-                  y: 20
-              
-              - label:
-                  id: lbl_temp_label
-                  text: "Temperature:"
-                  align: CENTER
-                  text_font: font_small
-                  text_color: 0xCCCCCC
-                  y: -40
-              
-              - label:
-                  id: lbl_temp
-                  text: "--°C"
-                  align: CENTER
-                  text_font: font_large
-                  text_color: 0x00FF00
-                  y: 20
-              
-              - label:
-                  id: lbl_time
-                  text: "--:--"
-                  align: BOTTOM_MID
-                  text_font: font_large
-                  text_color: 0xFFFFFF
-                  y: -20
+                  bg_color: 0x2F2FD3
+                  pad_all: 15
+                  widgets:
+                    - label:
+                        text: "Hot Water"
+                        text_font: font_medium
+                        text_color: 0xFFFFFF
+                        align: CENTER
 
-# Update clock every 10 seconds
-interval:
-  - interval: 10s
-    then:
-      - lvgl.label.update:
-          id: lbl_time
-          text: !lambda |-
-            auto t = id(ha_time).now();
-            if (t.is_valid()) {
-              char buf[16];
-              t.strftime(buf, sizeof(buf), "%H:%M");
-              return std::string(buf);
-            }
-            return std::string("--:--");
+              - obj:
+                  width: 92%
+                  height: 160
+                  align: TOP_MID
+                  y: 110
+                  bg_color: 0x1E1E1E
+                  radius: 18
+                  pad_all: 20
+                  widgets:
+                    - label:
+                        id: lbl_time
+                        text: "--:--"
+                        text_font: font_large
+                        text_color: 0xFFFFFF
+                        align: CENTER
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Configuration Notes
-# ══════════════════════════════════════════════════════════════════════════════
-# 
-# SECRETS FILE (secrets.yaml):
-# Create a secrets.yaml file in the same directory with:
-#
-# api_encryption_key: "your-32-byte-base64-key-here"
-# ota_password: "your-ota-password"
-# wifi_ssid: "Your-WiFi-SSID"
-# wifi_password: "your-wifi-password"
-#
-# TROUBLESHOOTING:
-# - If display shows colored lines: Check init sequence and MADCTL rotation
-# - If display blank: Check backlight, VCOM delay, and LVGL buffer size
-# - If WiFi causes crashes: Increase boot delay or reduce LVGL buffer
-# - If boot loops: Check PSRAM settings (keep FETCH_INSTRUCTIONS disabled)
-#
-# HARDWARE VARIATIONS:
-# This config is for Waveshare 2.8B (480x640). For other ST7701S displays:
-# - Adjust init_sequence based on your panel's datasheet
-# - Verify data pin mappings match your board
-# - Adjust MADCTL (0x36) value for different rotations
-# ══════════════════════════════════════════════════════════════════════════════
+              - obj:
+                  width: 92%
+                  height: 160
+                  align: TOP_MID
+                  y: 290
+                  bg_color: 0x2C2C2C
+                  radius: 18
+                  pad_all: 20
+                  widgets:
+                    - label:
+                        text: "Immersion Watts"
+                        text_font: font_small
+                        text_color: 0xBBBBBB
+                        align: TOP_MID
+                    - label:
+                        id: lbl_watts
+                        text: "--W"
+                        text_font: font_large
+                        text_color: 0xFFFFFF
+                        align: CENTER
+                        y: 30
+
+              - obj:
+                  width: 92%
+                  height: 160
+                  align: TOP_MID
+                  y: 470
+                  bg_color: 0x242424
+                  radius: 18
+                  pad_all: 20
+                  widgets:
+                    - label:
+                        text: "Immersion Amps"
+                        text_font: font_small
+                        text_color: 0xBBBBBB
+                        align: TOP_MID
+                    - label:
+                        id: lbl_amps
+                        text: "0.00A"
+                        text_font: font_large
+                        text_color: 0xFFFFFF
+                        align: CENTER
+                        y: 30
+
+    - id: sleep_page
+      bg_color: 0x000000
+      widgets:
+        - label:
+            text: "Tap to wake"
+            text_font: font_sleep
+            text_color: 0x7A7A7A
+            align: CENTER
+
